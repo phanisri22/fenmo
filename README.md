@@ -1,6 +1,19 @@
 # Expense Tracker
 
-A minimal full-stack personal expense tracker built with FastAPI (Python) and plain HTML/CSS/JS.
+A minimal full-stack personal expense tracker built with FastAPI (Python) for the backend and Next.js, React, and TypeScript for the frontend.
+
+## Features
+
+- Create a new expense with amount, category, description, and date
+- View a list of expenses
+- Filter expenses by category
+- Sort expenses by date, newest first
+- See the total of the currently visible expenses
+- Edit existing expenses
+- Delete expenses
+- View a lightweight summary by category
+- Get loading and error states in the UI
+- Safely retry expense creation without duplicate records
 
 ## Quick start
 
@@ -10,21 +23,32 @@ A minimal full-stack personal expense tracker built with FastAPI (Python) and pl
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload
-# API available at http://localhost:8000
-# Interactive docs at http://localhost:8000/docs
 ```
+
+Backend URLs:
+
+- API: `http://localhost:8000`
+- Docs: `http://localhost:8000/docs`
 
 ### Frontend
 
-Open `frontend/index.html` directly in a browser, or serve it with any static file server:
-
 ```bash
 cd frontend
-python -m http.server 3000
-# Open http://localhost:3000
+npm install
+npm run dev
 ```
 
-The frontend expects the backend at `http://localhost:8000`. Change `API_BASE` at the top of `app.js` if needed.
+Frontend URL:
+
+- App: `http://localhost:3000`
+
+### Frontend environment
+
+Create `frontend/.env.local` with:
+
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
 
 ### Tests
 
@@ -39,34 +63,38 @@ pytest tests/ -v
 
 ### 1. Money stored as integer paise
 
-Monetary amounts are stored as `INTEGER` paise (hundredths of a rupee) in SQLite, not as `REAL` or `DECIMAL`.
+Monetary amounts are stored as integer paise in SQLite, not floating-point values.
 
-**Why this matters:** `REAL` (IEEE 754 double) cannot represent most decimal fractions exactly. `0.1 + 0.2 ≠ 0.3` in floating point. Summing many floating-point amounts drifts silently. By storing `amount_paise INT` and converting at the API boundary (`₹103.45 → 10345`), all arithmetic in the database is exact integer arithmetic.
+Why this matters: money calculations should not drift due to binary floating-point representation. By storing `amount_paise` as an integer, the backend keeps arithmetic exact and only converts to rupees at the API boundary.
 
-The API returns amounts as JSON numbers (floats), which is conventional. The frontend re-converts to paise (`Math.round(amount * 100)`) before summing, preventing any accumulation error in totals.
+### 2. Idempotent POST for duplicate clicks, retries, and refreshes
 
-### 2. Idempotent POST via client-supplied idempotency key
+The assignment explicitly calls out unreliable networks, retries, and browser refreshes. To handle that safely, the frontend generates an `idempotency_key` and stores it in `sessionStorage` until the create request succeeds.
 
-The spec requires: *"The API should behave correctly even if the client retries the same request due to network issues or page reloads."*
+The backend stores that key with a unique constraint and returns the same record if the request is retried. This prevents duplicate expense creation when users click submit multiple times or retry after a failed response.
 
-**Approach:** The client generates a UUID (`crypto.randomUUID()`) before the first POST attempt and stores it in `sessionStorage`. If the request fails or the page is reloaded before a response arrives, the same UUID is still in `sessionStorage`. The retry carries the same key, and the server returns the existing record instead of inserting a duplicate.
+### 3. SQLite for simple durable persistence
 
-**Server-side:** `idempotency_key` has a `UNIQUE` constraint. The happy path checks for an existing row before inserting. An `IntegrityError` catch handles the rare concurrent-request race without exposing an error to the caller.
+SQLite was chosen because it is lightweight, requires no separate server, and is easy to inspect during development. It is a good fit for a small personal finance tool and keeps the project simple within the timebox.
 
-**Key rotation:** On successful submission the frontend rotates to a fresh UUID, so the next expense gets its own idempotency context.
+### 4. Next.js frontend for maintainable UI state
 
-### 3. Persistence: SQLite
+The frontend uses Next.js with React and TypeScript to keep the UI structured and maintainable. React Query handles API fetching, caching, refetching, optimistic deletion updates, loading states, and error handling in a clean way.
 
-SQLite is a file-based relational database with zero configuration. For a personal, single-user finance tool it is a good default: data survives restarts, queries are SQL, and there is no separate server process to manage. The SQLAlchemy ORM layer means switching to Postgres is a one-line change (the `DATABASE_URL`).
+### 5. Validation at both backend and frontend layers
 
-### 4. Frontend: plain HTML + CSS + JS (no framework)
+- Backend validation is the source of truth and rejects invalid amounts, blank categories, and missing dates
+- Frontend validation mirrors those rules for immediate feedback
 
-A framework would add a build step and significant complexity for what is ultimately a single-page form + table. Vanilla JS with `fetch` and `sessionStorage` handles every acceptance criterion with less code and no dependencies.
+### 6. Render for backend and Vercel for frontend
 
-### 5. Input validation at two layers
+For deployment, the backend is hosted on Render and the frontend is hosted on Vercel.
 
-- **Backend (Pydantic):** amount > 0, at most 2 decimal places, non-empty category, valid date. This is the authoritative layer.
-- **Frontend:** mirrors the same rules for immediate user feedback before a round-trip. The frontend never assumes the server will accept its data.
+- Render is a straightforward fit for FastAPI services and gives a simple deployment flow for Python APIs
+- Vercel is the most natural hosting platform for Next.js apps and makes frontend deployment very fast
+- Keeping backend and frontend separately deployed mirrors a realistic production setup and simplifies environment configuration
+
+One deployment caveat is that SQLite on many free hosting environments may not be truly persistent across restarts unless persistent storage is configured. For a production-grade multi-user version, I would move persistence to Postgres.
 
 ---
 
@@ -74,26 +102,53 @@ A framework would add a build step and significant complexity for what is ultima
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/expenses` | Create an expense (idempotent) |
-| `GET`  | `/expenses` | List expenses (`?category=X`, `?sort=date_desc`) |
-| `GET`  | `/expenses/categories` | All distinct category names (for the filter dropdown) |
+| `POST` | `/expenses` | Create a new expense (idempotent) |
+| `GET`  | `/expenses` | List expenses with optional `category` and `sort=date_desc` |
+| `GET`  | `/expenses/categories` | Return distinct category names |
+| `PUT`  | `/expenses/{expense_id}` | Update an existing expense |
+| `DELETE` | `/expenses/{expense_id}` | Delete an expense |
 
-Full interactive docs: `http://localhost:8000/docs`
+Interactive docs are available locally at `http://localhost:8000/docs`.
 
 ---
 
 ## Trade-offs made for the timebox
 
-- **No authentication.** A personal tool for a single user. Adding auth (OAuth2 / session cookies) would be the first extension if this became multi-user.
-- **No database migrations (Alembic).** `Base.metadata.create_all` is used on startup. Schema changes would require manual migration or a reset.
-- **No pagination.** Acceptable for personal finance volumes (hundreds–thousands of rows). A real production service would add cursor-based pagination.
-- **CORS allows all origins.** Fine for local development; a deployed version would pin `allow_origins` to the frontend domain.
+- No authentication or multi-user support
+- No database migrations such as Alembic
+- No pagination
+- CORS is open for simplicity during development
+- SQLite is used instead of a hosted production database
+
+These trade-offs kept the project focused on correctness, money handling, retry safety, and overall production-readiness of the core expense workflow.
 
 ## Intentionally not done
 
 - User authentication / multi-tenancy
-- Expense editing or deletion
 - Recurring expenses
-- Currency support beyond INR
-- Real-time updates (WebSocket / SSE)
-- Containerisation (Docker) — the setup is simple enough without it
+- Multi-currency support beyond INR
+- Real-time sync
+- Docker/container setup
+- Postgres migration for hosted durability
+
+## Deployment summary
+
+- GitHub Repository: `https://github.com/phanisri22/fenmo`
+- Frontend: deploy `frontend` on Vercel
+- Backend: deploy `backend` on Render
+- Frontend environment variable:
+
+```bash
+NEXT_PUBLIC_API_URL=<your-render-backend-url>
+```
+
+## What to verify after deployment
+
+- Expense creation works
+- Duplicate submit does not create duplicate expenses
+- Refresh after submit does not duplicate records
+- Expense list loads correctly
+- Filter and sort work
+- Total updates for the visible list
+- Edit and delete work
+- Loading and error states are visible during failed or slow requests
