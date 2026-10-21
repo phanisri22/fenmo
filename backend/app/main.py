@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -46,6 +46,17 @@ def get_db():
         db.close()
 
 
+def get_device_id(x_device_id: Optional[str] = Header(None)) -> str:
+    """Anonymous per-browser ID sent by the frontend; scopes every query."""
+    device_id = (x_device_id or "").strip()
+    if not device_id or len(device_id) > 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Device-Id header is required",
+        )
+    return device_id
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -62,8 +73,13 @@ def _to_response(expense: Expense) -> ExpenseResponse:
     )
 
 
-def _get_expense_or_404(expense_id: str, db: Session) -> Expense:
-    expense = db.query(Expense).filter(Expense.id == expense_id).first()
+def _get_expense_or_404(expense_id: str, device_id: str, db: Session) -> Expense:
+    # Another device's expense is reported as not found, so IDs can't be probed.
+    expense = (
+        db.query(Expense)
+        .filter(Expense.id == expense_id, Expense.device_id == device_id)
+        .first()
+    )
     if not expense:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -82,7 +98,11 @@ def _get_expense_or_404(expense_id: str, db: Session) -> Expense:
     status_code=status.HTTP_201_CREATED,
     summary="Create a new expense (idempotent)",
 )
-def create_expense(body: ExpenseCreate, db: Session = Depends(get_db)):
+def create_expense(
+    body: ExpenseCreate,
+    device_id: str = Depends(get_device_id),
+    db: Session = Depends(get_db),
+):
     """
     Create a new expense.
 
@@ -91,15 +111,22 @@ def create_expense(body: ExpenseCreate, db: Session = Depends(get_db)):
     existing record unchanged — making it safe to retry on network failures or
     after a browser refresh without creating duplicates.
     """
-    existing = (
-        db.query(Expense)
-        .filter(Expense.idempotency_key == body.idempotency_key)
-        .first()
-    )
+    def find_existing():
+        return (
+            db.query(Expense)
+            .filter(
+                Expense.device_id == device_id,
+                Expense.idempotency_key == body.idempotency_key,
+            )
+            .first()
+        )
+
+    existing = find_existing()
     if existing:
         return _to_response(existing)
 
     expense = Expense(
+        device_id=device_id,
         idempotency_key=body.idempotency_key,
         amount_paise=int(body.amount * 100),
         category=body.category,
@@ -113,11 +140,7 @@ def create_expense(body: ExpenseCreate, db: Session = Depends(get_db)):
     except IntegrityError:
         # Two concurrent requests raced on the same idempotency_key.
         db.rollback()
-        existing = (
-            db.query(Expense)
-            .filter(Expense.idempotency_key == body.idempotency_key)
-            .first()
-        )
+        existing = find_existing()
         if existing:
             return _to_response(existing)
         raise HTTPException(status_code=500, detail="Unexpected integrity error")
@@ -133,9 +156,10 @@ def create_expense(body: ExpenseCreate, db: Session = Depends(get_db)):
 def list_expenses(
     category: Optional[str] = Query(None, description="Filter by exact category name"),
     sort: Optional[str] = Query(None, description="Use 'date_desc' to sort newest first"),
+    device_id: str = Depends(get_device_id),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Expense)
+    query = db.query(Expense).filter(Expense.device_id == device_id)
 
     if category:
         query = query.filter(Expense.category == category)
@@ -152,9 +176,18 @@ def list_expenses(
     response_model=list[str],
     summary="Return all distinct category names",
 )
-def list_categories(db: Session = Depends(get_db)):
+def list_categories(
+    device_id: str = Depends(get_device_id),
+    db: Session = Depends(get_db),
+):
     """Used by the frontend to populate the filter and edit dropdowns."""
-    rows = db.query(Expense.category).distinct().order_by(Expense.category).all()
+    rows = (
+        db.query(Expense.category)
+        .filter(Expense.device_id == device_id)
+        .distinct()
+        .order_by(Expense.category)
+        .all()
+    )
     return [r[0] for r in rows]
 
 
@@ -166,6 +199,7 @@ def list_categories(db: Session = Depends(get_db)):
 def update_expense(
     expense_id: str,
     body: ExpenseUpdate,
+    device_id: str = Depends(get_device_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -174,7 +208,7 @@ def update_expense(
     PUT is naturally idempotent — sending the same request twice produces the
     same result, so no idempotency key is required for edit operations.
     """
-    expense = _get_expense_or_404(expense_id, db)
+    expense = _get_expense_or_404(expense_id, device_id, db)
     expense.amount_paise = int(body.amount * 100)
     expense.category = body.category
     expense.description = body.description
@@ -189,7 +223,11 @@ def update_expense(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an expense",
 )
-def delete_expense(expense_id: str, db: Session = Depends(get_db)):
-    expense = _get_expense_or_404(expense_id, db)
+def delete_expense(
+    expense_id: str,
+    device_id: str = Depends(get_device_id),
+    db: Session = Depends(get_db),
+):
+    expense = _get_expense_or_404(expense_id, device_id, db)
     db.delete(expense)
     db.commit()

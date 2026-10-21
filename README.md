@@ -14,6 +14,7 @@ A minimal full-stack personal expense tracker built with FastAPI (Python) for th
 - View a lightweight summary by category
 - Get loading and error states in the UI
 - Safely retry expense creation without duplicate records
+- Private per-device history with no login required
 
 ## Quick start
 
@@ -86,7 +87,13 @@ The frontend uses Next.js with React and TypeScript to keep the UI structured an
 - Backend validation is the source of truth and rejects invalid amounts, blank categories, and missing dates
 - Frontend validation mirrors those rules for immediate feedback
 
-### 6. Render for backend and Vercel for frontend
+### 6. Per-device privacy without login
+
+On first visit the frontend generates a random device ID, stores it in `localStorage`, and sends it as an `X-Device-Id` header on every request. The backend stores it with each expense and filters every query by it, so a browser only sees and can only change its own expenses. Requests without the header are rejected with `400`.
+
+Trade-off: clearing browser data or switching browser/device starts a fresh, empty history.
+
+### 7. Render for backend and Vercel for frontend
 
 For deployment, the backend is hosted on Render and the frontend is hosted on Vercel.
 
@@ -99,6 +106,8 @@ One deployment caveat is that SQLite on many free hosting environments may not b
 ---
 
 ## API reference
+
+All endpoints require an `X-Device-Id` header.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -114,7 +123,7 @@ Interactive docs are available locally at `http://localhost:8000/docs`.
 
 ## Trade-offs made for the timebox
 
-- No authentication or multi-user support
+- No authentication; privacy is per device via an anonymous device ID
 - No database migrations such as Alembic
 - No pagination
 - CORS is open for simplicity during development
@@ -124,7 +133,7 @@ These trade-offs kept the project focused on correctness, money handling, retry 
 
 ## Intentionally not done
 
-- User authentication / multi-tenancy
+- User accounts / syncing history across devices
 - Recurring expenses
 - Multi-currency support beyond INR
 - Real-time sync

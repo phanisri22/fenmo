@@ -55,7 +55,12 @@ def _fresh_db():
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Device-Id": "device-a"})
+
+
+@pytest.fixture
+def other_client():
+    return TestClient(app, headers={"X-Device-Id": "device-b"})
 
 
 # ---------------------------------------------------------------------------
@@ -335,3 +340,28 @@ class TestListCategories:
     def test_empty_when_no_expenses(self, client):
         r = client.get("/expenses/categories")
         assert r.json() == []
+
+
+class TestDeviceIsolation:
+    def test_missing_device_header_rejected(self):
+        r = TestClient(app).get("/expenses")
+        assert r.status_code == 400
+
+    def test_other_device_cannot_see_expenses(self, client, other_client):
+        client.post("/expenses", json=_expense(category="Food"))
+        assert other_client.get("/expenses").json() == []
+        assert other_client.get("/expenses/categories").json() == []
+
+    def test_other_device_cannot_edit_or_delete(self, client, other_client):
+        created = client.post("/expenses", json=_expense()).json()
+        payload = {"amount": "1", "category": "X", "description": "", "date": "2024-01-01"}
+        assert other_client.put(f"/expenses/{created['id']}", json=payload).status_code == 404
+        assert other_client.delete(f"/expenses/{created['id']}").status_code == 404
+        assert client.get("/expenses").json()[0]["amount"] == 150.50
+
+    def test_same_idempotency_key_on_two_devices_creates_two_records(self, client, other_client):
+        key = str(uuid.uuid4())
+        r1 = client.post("/expenses", json=_expense(idempotency_key=key))
+        r2 = other_client.post("/expenses", json=_expense(idempotency_key=key))
+        assert r1.status_code == r2.status_code == 201
+        assert r1.json()["id"] != r2.json()["id"]

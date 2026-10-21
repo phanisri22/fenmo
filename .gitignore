@@ -6,3 +6,4 @@ backend/.pytest_cache/
 backend/app/__pycache__/
 backend/tests/__pycache__/
 *.pyc
+backend/expense_tracker.db

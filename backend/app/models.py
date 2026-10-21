@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Date, DateTime, Integer, String
+from sqlalchemy import Date, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -13,12 +13,16 @@ def _utcnow() -> datetime:
 
 class Expense(Base):
     __tablename__ = "expenses"
+    __table_args__ = (UniqueConstraint("device_id", "idempotency_key"),)
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
+    # Anonymous per-browser ID; each device only sees its own expenses.
+    device_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
     # Client-supplied UUID that makes POST idempotent across retries / page reloads.
-    idempotency_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
 
     # Stored in paise (1/100 of a rupee) as an integer to avoid all floating-point
     # representation issues. ₹103.45 → 10345.
