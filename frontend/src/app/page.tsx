@@ -1,6 +1,7 @@
 import { Wallet } from "lucide-react";
 import { AddExpenseForm } from "@/components/AddExpenseForm";
 import { ExpenseDashboard } from "@/components/ExpenseDashboard";
+import { StorageNotice } from "@/components/StorageNotice";
 
 export default function Home() {
   return (
@@ -23,6 +24,10 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      <div className="px-4 sm:px-6 lg:px-8">
+        <StorageNotice />
+      </div>
 
       <section className="mx-auto max-w-6xl px-4 pb-12 pt-8 sm:px-6 lg:px-8 lg:pt-10">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] xl:items-start">
